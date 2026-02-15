@@ -147,6 +147,9 @@ export default function App() {
                     </div>
                     <div className="flex items-center font-small font-medium text-md">
                         <a href="/dashboard">Dashboard</a>
+                        <a href="/portfolio" className="ml-2">
+                            Portfolio
+                        </a>
                         <a
                             href="/admin-redirect"
                             target="_blank"
