@@ -1,6 +1,6 @@
 {
     "main": "./workers/app.ts",
-    "name": "counterscale",
+    "name": "pharmacy-analytics",
     "compatibility_flags": ["nodejs_compat_v2"],
     "compatibility_date": "2024-12-13",
     "assets": {
