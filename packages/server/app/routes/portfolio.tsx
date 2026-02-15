@@ -1,11 +1,10 @@
 import type { LoaderFunctionArgs, MetaFunction } from "react-router";
 import {
     redirect,
-    useFetcher,
     useLoaderData,
     useSearchParams,
 } from "react-router";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 
 import {
     Card,
@@ -23,13 +22,18 @@ import {
 import { requireAuth } from "~/lib/auth";
 import {
     applyDefaultUnifiedFilters,
+    computeSummaryTotals,
+    filterInsights,
+    filterSites,
+    getIntervalDataOrThrow,
     getUnifiedFiltersFromSearchParams,
+    isSnapshotStale,
     needsDefaultFilterRedirect,
+    readUnifiedSnapshot,
+    STALE_THRESHOLD_HOURS,
+    toResponseError,
 } from "~/lib/unified-snapshot";
 import type { UnifiedSiteMetrics } from "~/lib/unified-types";
-import type { loader as insightsLoader } from "~/routes/resources.unified-insights";
-import type { loader as sitesLoader } from "~/routes/resources.unified-sites";
-import type { loader as summaryLoader } from "~/routes/resources.unified-summary";
 
 export const meta: MetaFunction = () => {
     return [
@@ -41,14 +45,32 @@ export const meta: MetaFunction = () => {
 export async function loader({ context, request }: LoaderFunctionArgs) {
     await requireAuth(request, context.cloudflare.env);
 
-    const url = new URL(request.url);
-    if (needsDefaultFilterRedirect(url.searchParams)) {
-        throw redirect(applyDefaultUnifiedFilters(url).toString());
-    }
+    try {
+        const url = new URL(request.url);
+        if (needsDefaultFilterRedirect(url.searchParams)) {
+            throw redirect(applyDefaultUnifiedFilters(url).toString());
+        }
 
-    return {
-        filters: getUnifiedFiltersFromSearchParams(url.searchParams),
-    };
+        const filters = getUnifiedFiltersFromSearchParams(url.searchParams);
+        const snapshot = await readUnifiedSnapshot();
+        const intervalData = getIntervalDataOrThrow(snapshot, filters.interval);
+        const sites = filterSites(intervalData.sites, filters);
+        const totals = computeSummaryTotals(sites);
+        const insights = filterInsights(snapshot.insights || [], sites);
+
+        return {
+            filters,
+            stale: isSnapshotStale(snapshot.generated_at),
+            stale_after_hours: STALE_THRESHOLD_HOURS,
+            generated_at: snapshot.generated_at,
+            source_health: snapshot.source_health,
+            totals,
+            insights,
+            sites,
+        };
+    } catch (error) {
+        throw toResponseError(error);
+    }
 }
 
 type SortDirection = "asc" | "desc";
@@ -169,56 +191,20 @@ export default function Portfolio() {
         [searchParams],
     );
 
-    const summaryFetcher = useFetcher<typeof summaryLoader>();
-    const sitesFetcher = useFetcher<typeof sitesLoader>();
-    const insightsFetcher = useFetcher<typeof insightsLoader>();
-
-    useEffect(() => {
-        const requestFilters = {
-            interval: filters.interval,
-            country: filters.country,
-            traffic: filters.traffic,
-            site_group: filters.site_group,
-        };
-
-        summaryFetcher.submit(requestFilters, {
-            method: "get",
-            action: "/resources/unified-summary",
-        });
-        sitesFetcher.submit(requestFilters, {
-            method: "get",
-            action: "/resources/unified-sites",
-        });
-        insightsFetcher.submit(requestFilters, {
-            method: "get",
-            action: "/resources/unified-insights",
-        });
-        // data fetchers are intentionally omitted from deps
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [filters.interval, filters.country, filters.traffic, filters.site_group]);
-
     const [sortKey, setSortKey] = useState<PortfolioSortKey>("ga4_sessions");
     const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
     const [expandedSite, setExpandedSite] = useState<string | null>(null);
 
-    const sites = sitesFetcher.data?.sites || [];
+    const sites = data.sites || [];
     const sortedSites = useMemo(
         () => sortPortfolioSites(sites, sortKey, sortDirection),
         [sites, sortKey, sortDirection],
     );
 
-    const summary = summaryFetcher.data?.totals;
-    const insights = (insightsFetcher.data?.insights || []).slice(0, 5);
-    const stale =
-        summaryFetcher.data?.stale ||
-        sitesFetcher.data?.stale ||
-        insightsFetcher.data?.stale ||
-        false;
-
-    const generatedAt =
-        summaryFetcher.data?.generated_at ||
-        sitesFetcher.data?.generated_at ||
-        insightsFetcher.data?.generated_at;
+    const summary = data.totals;
+    const insights = (data.insights || []).slice(0, 5);
+    const stale = data.stale || false;
+    const generatedAt = data.generated_at;
 
     function updateFilter(key: string, value: string) {
         setSearchParams((prev) => {
